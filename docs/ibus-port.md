@@ -1,11 +1,13 @@
 # IBus port: sketch
 
-Status (2026-10-10): **adapter and headless suite landed** (`linux/ibus/`,
+Status (2026-10-11): **adapter and headless suite landed** (`linux/ibus/`,
 `script/linux/test_ibus.sh`): C1–C15 plus delivery rules LR1–LR5 pass against a
 real ibus-daemon (Ubuntu 24.04, ibus 1.5.29) with the engine process, in the
-Linux dev image and CI (inside `script/linux/test_all.sh`). **Not verified:**
-a real desktop (GNOME Shell's candidate popup, Wayland sessions, GTK/Qt
-clients, browsers) and distro packaging; those are I5 and I6 below.
+Linux dev image and CI (inside `script/linux/test_all.sh`). Local release
+container verification now passes on Ubuntu 24.04 and Fedora 43; a clean Arch
+`x86_64` IBus `makepkg` build also passes (I6 below). **Not verified:** a real
+desktop (GNOME Shell's candidate popup, Wayland sessions, GTK/Qt clients,
+browsers), the first IBus AUR publication, and the post-merge Release workflow.
 
 **Goal:** Misstype runs as an IBus engine (GNOME's default on Ubuntu, Fedora
 and Debian) with the same behavior as macOS and fcitx5, over the same C ABI,
@@ -70,14 +72,44 @@ that passes.
 - **I4 CI (done).** Add the IBus suite to `script/linux/test_all.sh` and the existing
   Linux matrix in `.github/workflows/ci.yml`.
 - **I5 Desktop acceptance.** GNOME Wayland + X11, GTK and Qt apps, a browser,
-  a terminal. Same checklist as L6.
+  a terminal. Same checklist as L6. Record distro, GNOME/IBus versions,
+  session type, app/version, result and any reproduction trace. In each
+  session, check `su3cl3` → **你好** + Return, candidate arrows/Tab/click,
+  syllable cursor and phrase marking, Backspace repeat, lone Shift 中/英,
+  and focus changes mid-composition. Check popup placement and caret styling
+  in GTK, Qt, browser and terminal clients. Open GNOME Settings → Keyboard →
+  Input Sources → Misstype → Preferences; change candidates per page and
+  confirm the running engine adopts it without restarting. Headless tests
+  do not satisfy this acceptance check.
 - **I6 Packaging.** Release packages: the Release workflow builds, installs and
   removes `.deb` / `.rpm` / Arch packages for the engine (`MisstypeIBus-*`,
   `script/linux/package_{deb,rpm,arch}.sh <version> ibus`), conflicting with the
   fcitx5 packages. Arch recipe `linux/aur-ibus/PKGBUILD` (`ibus-misstype-git`,
-  not published to the AUR yet; see `arch-linux.md`). The engine's CMake install is self-contained
-  (lexicon, `misstypectl`, licences). `.deb` later (see backlog in
-  `linux-port.md`).
+  not published to the AUR yet; see `arch-linux.md`). The engine's CMake
+  install is self-contained (lexicon, `misstypectl`, licences). AUR automation
+  now prepares both package recipes; IBus's first publication requires the
+  explicit manual dispatch documented in `arch-linux.md`.
+
+## Packaging verification (2026-10-11, issue #63)
+
+On greenhouse, rootless Podman ran the existing
+`script/linux/release_container.sh` against this checkout (based on `e00e96c`)
+with `VERSION=0.0.0` in fresh `ubuntu:24.04` and `fedora:43` containers:
+
+- Both printed `ALL LINUX TESTS OK`: Zig tests, C ABI smoke check, fcitx5's
+  19 scenarios and the IBus conformance suite passed.
+- Both built fcitx5 and IBus packages, then installed and removed each flavor
+  separately. Installed `misstypectl`, core-library dependencies, engine and
+  component XML checks passed; the private library was removed afterwards.
+- Both printed `PACKAGE BUILD / INSTALL / REMOVE OK`. Artifacts were local
+  verification `.deb` / `.rpm` files, not published releases.
+- Arch `x86_64` `script/linux/package_arch.sh 0.0.0 ibus` also completed with
+  its `makepkg` check suite; details are in `arch-linux.md`. That command did
+  not perform pacman installation/removal.
+
+The first GitHub Release dispatch must still verify CI execution and asset
+attachment. I5 desktop acceptance and actual AUR publication remain open;
+do not infer either from these container results.
 
 ## Open questions
 

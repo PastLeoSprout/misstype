@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Publish only the prepared packaging files; never source PKGBUILD here.
 set -euo pipefail
-package=${1:?usage: publish_aur.sh <prepared-package-directory>}
+package=${1:?usage: publish_aur.sh <prepared-package-directory> [package-name]}
+name=${2:-fcitx5-misstype-git}
+files=(PKGBUILD .SRCINFO LICENSE)
+case $name in
+fcitx5-misstype-git) files+=(cxx20.patch) ;;
+ibus-misstype-git) ;;
+*) echo "Unsupported AUR package: $name" >&2; exit 1 ;;
+esac
 : "${AUR_SSH_PRIVATE_KEY:?Set repository secret AUR_SSH_PRIVATE_KEY}"
 : "${AUR_MAINTAINER:?Set repository secret AUR_MAINTAINER (Name <email>)}"
 : "${RUNNER_TEMP:?Run in GitHub Actions}"
@@ -25,10 +32,11 @@ if [[ $GITHUB_REF == refs/tags/* ]]; then
         exit 1
     }
 fi
-for file in PKGBUILD .SRCINFO cxx20.patch LICENSE; do
+for file in "${files[@]}"; do
     [[ -f $package/$file && ! -L $package/$file ]]
 done
-grep -Fxq 'pkgbase = fcitx5-misstype-git' "$package/.SRCINFO"
+[[ $(grep '^pkgbase = ' "$package/.SRCINFO") == "pkgbase = $name" ]]
+[[ $(grep '^pkgname = ' "$package/.SRCINFO") == "pkgname = $name" ]]
 grep -Fxq "# Maintainer: $AUR_MAINTAINER" "$package/PKGBUILD"
 
 work=$(mktemp -d "$RUNNER_TEMP/aur-publish.XXXXXX")
@@ -46,11 +54,11 @@ printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$work/key"
 unset AUR_SSH_PRIVATE_KEY
 printf -v GIT_SSH_COMMAND 'ssh -i %q -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%q' "$work/key" "$work/known_hosts"
 export GIT_SSH_COMMAND
-git clone ssh://aur@aur.archlinux.org/fcitx5-misstype-git.git "$work/repo"
-for file in PKGBUILD .SRCINFO cxx20.patch LICENSE; do
+git clone "ssh://aur@aur.archlinux.org/$name.git" "$work/repo"
+for file in "${files[@]}"; do
     install -m644 "$package/$file" "$work/repo/$file"
 done
-git -C "$work/repo" add -- PKGBUILD .SRCINFO cxx20.patch LICENSE
+git -C "$work/repo" add -- "${files[@]}"
 if git -C "$work/repo" diff --cached --quiet; then
     printf '### AUR\n\nPackaging already matches AUR; no commit or push needed.\n' >> "$GITHUB_STEP_SUMMARY"
     exit 0
@@ -61,4 +69,4 @@ git -C "$work/repo" -c user.name='Misstype AUR automation' \
     commit -m "Update packaging from misstype ${GITHUB_SHA:0:12}"
 # Never force: a concurrent maintainer update must be reviewed before retrying.
 git -C "$work/repo" push origin HEAD:master
-printf '### AUR\n\nPublished packaging to [fcitx5-misstype-git](https://aur.archlinux.org/packages/fcitx5-misstype-git).\n' >> "$GITHUB_STEP_SUMMARY"
+printf '### AUR\n\nPublished packaging to [%s](https://aur.archlinux.org/packages/%s).\n' "$name" "$name" >> "$GITHUB_STEP_SUMMARY"

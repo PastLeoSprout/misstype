@@ -18,6 +18,8 @@ on:
       - linux/aur/PKGBUILD
       - linux/aur/.SRCINFO
       - linux/aur/cxx20.patch
+      - linux/aur-ibus/PKGBUILD
+      - linux/aur-ibus/.SRCINFO
       - LICENSE
       - .github/workflows/aur.yml
       - script/linux/publish_aur.sh
@@ -27,12 +29,18 @@ on:
       - linux/aur/PKGBUILD
       - linux/aur/.SRCINFO
       - linux/aur/cxx20.patch
+      - linux/aur-ibus/PKGBUILD
+      - linux/aur-ibus/.SRCINFO
       - LICENSE
       - .github/workflows/aur.yml
       - script/linux/publish_aur.sh
       - tests/test_aur_publish.py
   workflow_dispatch:
     inputs:
+      publish_ibus:
+        description: Authorize the initial IBus AUR publication (also requires publish)
+        type: boolean
+        default: false
       publish:
         description: Push to AUR (main or a published stable version tag)
         type: boolean
@@ -43,6 +51,14 @@ permissions:
 
 jobs:
   prepare:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: fcitx5-misstype-git
+            recipe: linux/aur
+          - package: ibus-misstype-git
+            recipe: linux/aur-ibus
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -53,9 +69,13 @@ jobs:
       - name: Prepare packaging preview without credentials
         env:
           AUR_MAINTAINER: ${{ secrets.AUR_MAINTAINER }}
+          RECIPE: ${{ matrix.recipe }}
         run: |
           mkdir -p "$RUNNER_TEMP/aur-package"
-          cp linux/aur/PKGBUILD linux/aur/cxx20.patch LICENSE "$RUNNER_TEMP/aur-package/"
+          cp "$RECIPE/PKGBUILD" LICENSE "$RUNNER_TEMP/aur-package/"
+          if [[ -f $RECIPE/cxx20.patch ]]; then
+            cp "$RECIPE/cxx20.patch" "$RUNNER_TEMP/aur-package/"
+          fi
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -74,19 +94,23 @@ jobs:
             cd /package
             runuser -u builder -- env -u MISSTYPE_SOURCE_URL makepkg --printsrcinfo > .SRCINFO
           '
-          diff -u linux/aur/.SRCINFO "$RUNNER_TEMP/aur-package/.SRCINFO"
+          diff -u "$RECIPE/.SRCINFO" "$RUNNER_TEMP/aur-package/.SRCINFO"
           bash -n script/linux/publish_aur.sh
           python3 tests/test_aur_publish.py
           cat "$RUNNER_TEMP/aur-package/.SRCINFO"
-          printf '### AUR preview\n\nPackaging metadata validated. Download `aur-package` to review the four files. This job does not build the package or access AUR credentials.\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '### AUR preview\n\nPackaging metadata validated. Download `aur-package-${{ matrix.package }}` to review the files. This job does not build the package or access AUR credentials.\n' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: aur-package
+          name: aur-package-${{ matrix.package }}
           path: ${{ runner.temp }}/aur-package/
           include-hidden-files: true
           retention-days: 7
 
   publish:
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [fcitx5-misstype-git, ibus-misstype-git]
     needs: prepare
     if: >-
       github.repository == 'Yukaii/misstype' &&
@@ -97,7 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: aur-fcitx5-misstype-git
+      group: aur-${{ matrix.package }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -106,11 +130,17 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: aur-package
+          name: aur-package-${{ matrix.package }}
           path: ${{ runner.temp }}/aur-package
       - name: Synchronize reviewed packaging to AUR
+        # IBus's initial push must be a manual publish dispatch. Enable later
+        # automatic synchronization only after the maintainer confirms it.
+        if: >-
+          matrix.package == 'fcitx5-misstype-git' ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish && inputs.publish_ibus) ||
+          vars.AUR_IBUS_PUBLISHED == 'true'
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           AUR_MAINTAINER: ${{ secrets.AUR_MAINTAINER }}
           GH_TOKEN: ${{ github.token }}
-        run: bash script/linux/publish_aur.sh "$RUNNER_TEMP/aur-package"
+        run: bash script/linux/publish_aur.sh "$RUNNER_TEMP/aur-package" "${{ matrix.package }}"

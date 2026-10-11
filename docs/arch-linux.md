@@ -37,10 +37,10 @@ On Omarchy, fcitx5 owns the input method (`omarchy-fcitx5.service`,
 `XMODIFIERS=@im=fcitx`); switch it off before using IBus, see
 [`ibus-port.md`](ibus-port.md#install-from-source). `check()` runs the Zig
 suite and the C ABI smoke test; the headless IBus suite runs in CI
-(`script/linux/test_ibus.sh`). Packaging is **unverified** with `makepkg` on a
-clean chroot: the recipe was checked with `bash -n` and the CMake install was
-staged with `DESTDIR` (engine, `<setup>` tool, lexicon, `misstypectl`,
-licences, icons).
+(`script/linux/test_ibus.sh`). A clean rootless Arch `x86_64` container build
+passed on 2026-10-11, including `check()` (Zig ReleaseFast tests and C ABI
+smoke test). See the verification record below; desktop acceptance is still
+open.
 
 ## Quick install from a checkout
 
@@ -61,6 +61,27 @@ distributions the same script runs `script/linux/build.sh` and
 `sudo cmake --install build/fcitx5`.
 
 ## Build a package
+
+IBus packaging verification for issue #63 (2026-10-11), in a fresh Arch
+container with the recipe's build dependencies installed:
+
+```sh
+script/linux/package_arch.sh 0.0.0 ibus
+```
+
+- Clean `makepkg --cleanbuild --force` completed against local committed
+  source `e00e96c`, producing `ibus-misstype-git-0.1.r263.ge00e96c-1-x86_64`
+  (release asset `MisstypeIBus-0.0.0-arch-x86_64.pkg.tar.zst`; `0.0.0` is a
+  local verification version, not a published release).
+- All pinned dictionary and Zig download checksums passed. Zig ReleaseFast
+  tests and the C ABI smoke check passed (35 exports, `CAPI OK`).
+- The package staged the engine, GTK4 Preferences tool, component XML,
+  private core library, lexicon, `misstypectl`, licences and icons.
+- Both recipes' committed `.SRCINFO` files match `makepkg --printsrcinfo`
+  with the source override unset. Publisher tests cover both destinations,
+  file lists, unchanged-publication no-op and authorization failures.
+- This run built the package; pacman install/remove and GNOME desktop
+  acceptance were not exercised by this command.
 
 Install `base-devel`, `cmake`, `ninja`, and `git`. The recipe downloads its
 checksum-pinned Zig toolchain as a makepkg source. On Omarchy:
@@ -206,12 +227,14 @@ Users can install with
 ### Automated synchronization and branch preview
 
 `.github/workflows/aur.yml` validates packaging on relevant branch pushes
-and PRs and uploads an `aur-package` preview containing only `PKGBUILD`,
-`.SRCINFO`, `cxx20.patch`, and the packaging license (`LICENSE`, MIT).
+and PRs and uploads separate `aur-package-fcitx5-misstype-git` and
+`aur-package-ibus-misstype-git` previews containing only `PKGBUILD`,
+`.SRCINFO`, and the packaging license (`LICENSE`, MIT), plus `cxx20.patch`
+for fcitx5.
 It regenerates `.SRCINFO` in a credential-free Arch container and requires
 it to match the committed metadata. This is a metadata check, not a full
 package build; run `makepkg` with its `check()` suite before publication.
-Hypothesis: these four files are enough to synchronize the AUR recipe
+Hypothesis: these package-specific files are enough to synchronize the AUR recipe
 without exposing credentials to PKGBUILD execution. The smallest check is
 a branch preview, inspection of its artifact, then an initial publish and
 an unchanged repeat run (which should make no AUR commit).
@@ -235,6 +258,14 @@ One-time setup by the AUR maintainer and GitHub administrator:
 4. Ensure the account owns or co-maintains `fcitx5-misstype-git`, or that the
    name is available for the initial push. Initial publication can be done
    manually as above or by the workflow's first authorized push.
+5. For IBus, confirm that `ibus-misstype-git` is available or that the account
+   owns/co-maintains it. The existing AUR key can create a second package:
+   keys authorize the account, not a particular package. The first IBus push
+   requires an explicit manual dispatch with both `publish=true` and
+   `publish_ibus=true`. After reviewing the resulting AUR package, set the
+   repository **Actions variable** `AUR_IBUS_PUBLISHED=true` to enable IBus
+   synchronization on main pushes and published stable releases. Leave it
+   unset until that initial publication is confirmed.
 
 AUR SSH keys are account-wide, not restricted to a single package. Giving
 upstream CI this key trusts its repository administrators with the AUR
@@ -251,6 +282,8 @@ publishes. To retry or preview manually:
 ```sh
 gh workflow run aur.yml --ref main                    # preview only
 gh workflow run aur.yml --ref main -f publish=true    # publish
+# First IBus publication (also synchronizes fcitx5):
+gh workflow run aur.yml --ref main -f publish=true -f publish_ibus=true
 # Retry the packaging from an already published stable version tag:
 gh workflow run aur.yml --ref v0.3.0 -f publish=true
 ```
@@ -267,6 +300,9 @@ not trigger another workflow). Artifact-only runs, prereleases, and failed
 releases do not publish to AUR. Relevant `main` pushes still synchronize
 packaging fixes between releases. AUR failures do not undo an already
 published GitHub Release; fix the cause and retry the AUR workflow.
+IBus automatic synchronization additionally requires `AUR_IBUS_PUBLISHED=true`;
+neither merging the workflow nor a Release dispatch creates it before the
+maintainer explicitly authorizes its first push.
 
 ## AUR verification (2026-10-10)
 
