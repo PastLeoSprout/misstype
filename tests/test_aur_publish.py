@@ -19,7 +19,7 @@ class AURPublishAuthorizationTests(unittest.TestCase):
         self.package.mkdir()
         for name, content in {
             "PKGBUILD": "# Maintainer: Test <test@example.invalid>\n",
-            ".SRCINFO": "pkgbase = fcitx5-misstype-git\n",
+            ".SRCINFO": "pkgbase = fcitx5-misstype-git\npkgname = fcitx5-misstype-git\n",
             "cxx20.patch": "test patch\n",
             "LICENSE": "test license\n",
         }.items():
@@ -43,9 +43,9 @@ ssh-keyscan() { echo 'TEST: reached SSH boundary' >&2; return 73; }
             TEST_RELEASE_PUBLISHED="true",
         )
 
-    def run_publisher(self, **changes):
+    def run_publisher(self, name="fcitx5-misstype-git", **changes):
         return subprocess.run(
-            ["bash", str(ROOT / "script/linux/publish_aur.sh"), str(self.package)],
+            ["bash", str(ROOT / "script/linux/publish_aur.sh"), str(self.package), name],
             env=dict(self.env, **changes), capture_output=True, text=True,
         )
 
@@ -81,6 +81,79 @@ ssh-keyscan() { echo 'TEST: reached SSH boundary' >&2; return 73; }
                 result = self.run_publisher(GITHUB_REF=ref)
                 self.assertEqual(result.returncode, 73)
                 self.assertIn("TEST: reached SSH boundary", result.stderr)
+
+    def test_ibus_does_not_require_fcitx5_patch(self):
+        (self.package / "cxx20.patch").unlink()
+        (self.package / ".SRCINFO").write_text(
+            "pkgbase = ibus-misstype-git\npkgname = ibus-misstype-git\n"
+        )
+        result = self.run_publisher(name="ibus-misstype-git")
+        self.assertEqual(result.returncode, 73)
+        self.assertIn("TEST: reached SSH boundary", result.stderr)
+
+    def test_unsupported_name_and_mismatched_metadata_never_reach_ssh(self):
+        for name in ("../other", "unknown-package", "ibus-misstype-git"):
+            with self.subTest(name=name):
+                result = self.run_publisher(name=name)
+                self.assertEqual(result.returncode, 1)
+                self.assertNotIn("SSH boundary", result.stderr)
+
+    def test_multiple_package_names_never_reach_ssh(self):
+        with (self.package / ".SRCINFO").open("a") as info:
+            info.write("pkgname = other-package\n")
+        result = self.run_publisher()
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("SSH boundary", result.stderr)
+
+    def test_publish_destination_file_list_and_unchanged_noop(self):
+        mocks = Path(self.env["BASH_ENV"])
+        mocks.write_text("""
+git() {
+    printf '%s\\n' "$*" >> "$TEST_GIT_LOG"
+    if [[ $1 == rev-parse ]]; then printf '%s\\n' "$TEST_CHECKOUT_SHA";
+    elif [[ $1 == clone ]]; then mkdir -p "$3";
+    elif [[ $3 == diff && $4 == --cached && $5 == --quiet ]]; then
+        return "$TEST_DIFF_STATUS"
+    fi
+}
+gh() { printf '%s\\n' "$TEST_RELEASE_PUBLISHED"; }
+ssh-keyscan() { echo 'test host key'; }
+ssh-keygen() { echo '256 SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4 test'; }
+""")
+        work = Path(self.temp.name)
+        for name, files in (
+            ("fcitx5-misstype-git", "PKGBUILD .SRCINFO LICENSE cxx20.patch"),
+            ("ibus-misstype-git", "PKGBUILD .SRCINFO LICENSE"),
+        ):
+            (self.package / ".SRCINFO").write_text(f"pkgbase = {name}\npkgname = {name}\n")
+            for changed in (False, True):
+                with self.subTest(name=name, changed=changed):
+                    log = work / f"{name}-{changed}.log"
+                    summary = work / "summary"
+                    result = self.run_publisher(
+                        name=name, TEST_GIT_LOG=str(log),
+                        TEST_DIFF_STATUS=str(int(changed)),
+                        GITHUB_STEP_SUMMARY=str(summary),
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    commands = log.read_text()
+                    self.assertIn(f"clone ssh://aur@aur.archlinux.org/{name}.git", commands)
+                    self.assertIn(f"add -- {files}", commands)
+                    self.assertEqual("push origin HEAD:master" in commands, changed)
+                    self.assertNotIn("--force", commands)
+                    if changed:
+                        self.assertIn(f"https://aur.archlinux.org/packages/{name}", summary.read_text())
+
+    def test_missing_or_symlinked_payload_never_reaches_ssh(self):
+        license = self.package / "LICENSE"
+        license.unlink()
+        result = self.run_publisher()
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("SSH boundary", result.stderr)
+        license.symlink_to(self.package / "PKGBUILD")
+        result = self.run_publisher()
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("SSH boundary", result.stderr)
 
 
 if __name__ == "__main__":
